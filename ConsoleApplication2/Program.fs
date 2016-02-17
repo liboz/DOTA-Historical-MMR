@@ -23,10 +23,12 @@ let htmlstring (region:string) (date:string) =
 type Player = {name: string; mmr: int; region: string; date: DateTime}
 
 
-let regionDict = new Dictionary<string, Dictionary<DateTime, Player[] option>>()
-regions |> Array.map (fun i -> regionDict.Add(i, new Dictionary<DateTime, Player[] option>())) |> ignore
+let regionDict = new Dictionary<string, Dictionary<DateTime, Player[] >>()
+regions |> Array.map (fun i -> regionDict.Add(i, new Dictionary<DateTime, Player[] >())) |> ignore
 
-let dateDict = new Dictionary<DateTime, Player[] option []>()
+let noData = new HashSet<DateTime*string>()
+
+let dateDict = new Dictionary<DateTime, Player[] []>()
 
 
 let ParseDate (date:DateTime) =
@@ -47,55 +49,62 @@ let ParseDate (date:DateTime) =
                         let datestring = formatDate date
                         let! results = HtmlDocument.AsyncLoad(htmlstring region datestring)
                         if (results.Descendants ["p"] |> Seq.head).InnerText().Contains("Data from " + datestring) then
-                            let parsedResults = Some(parseData results region)
+                            let parsedResults = parseData results region
                             regionDict.[region].Add(date, parsedResults)
-                            return parsedResults
+                            return Some(parsedResults)
                         else
                             printfn "%s has no data" datestring
-                            regionDict.[region].Add(date, None)
+                            noData.Add((date, region)) |> ignore
                             return None}
                         ]
 
 
-let scrapeOrRead = 
+let serializeToJson filename serialize_object = 
+    let json = JsonConvert.SerializeObject(serialize_object, Formatting.Indented);
+    File.WriteAllText(filename, json, Encoding.UTF8)
+
+
+[<EntryPoint>]
+let main argv =
     let stopWatch = Stopwatch.StartNew()
     let dateDictfileName = @"dateDict.json"
     let regionDictfileName = @"regionDict.json"
+    let noDatafileName = @"noData.json"
     if not (File.Exists(dateDictfileName) && File.Exists(regionDictfileName)) then
         let dates = [|DateTime.Parse("2014-03-26")..Span(TimeSpan.FromDays(1.))..DateTime.Now.Date|]
 
         Async.Parallel [for date in dates ->
                                     async {
                                     let! result = ParseDate date
+                                    let filtered_result = result 
+                                                            |> Array.map (fun i -> 
+                                                            match i with 
+                                                            | Some x -> x
+                                                            | None -> [||]
+                                                            )
                                     printfn "Parsed %s" (formatDate date)
-                                    dateDict.Add(date, result)
+                                    dateDict.Add(date, filtered_result)
+                                    
                                     }]
                                     |> Async.RunSynchronously
                                     |> ignore
                                    
         printfn "Parsing from online took %f ms" stopWatch.Elapsed.TotalMilliseconds
 
-        let json_date = JsonConvert.SerializeObject(dateDict, Formatting.Indented);
-        File.WriteAllText(dateDictfileName, json_date, Encoding.UTF8)
-        let json_region = JsonConvert.SerializeObject(regionDict, Formatting.Indented);
-        File.WriteAllText(regionDictfileName, json_region, Encoding.UTF8)
+        serializeToJson dateDictfileName dateDict
+        serializeToJson regionDictfileName regionDict
+        serializeToJson noDatafileName noData
     else
         let dateDict = JsonConvert.DeserializeObject<Dictionary<DateTime, Player[] option []>>(File.OpenText(dateDictfileName).ReadToEnd())
         let regionDict = JsonConvert.DeserializeObject<Dictionary<string, Dictionary<DateTime, Player[] option>>>(File.OpenText(regionDictfileName).ReadToEnd())
-        printfn "Parsing from file took %f ms" stopWatch.Elapsed.TotalMilliseconds
+        printfn "Parsing from file took %f ms" stopWatch.Elapsed.TotalMilliseconds 
 
-
-[<EntryPoint>]
-let main argv =
-    
     let Data = Array.zeroCreate(4)
     regions |> Array.iteri (fun index region -> 
                 let dates = regionDict.[region].Keys.ToArray()
                 let mmrs = regionDict.[region].Values.ToArray() 
                             |> Array.map (fun p -> 
-                                match p with 
-                                | Some i -> i |> Array.map(fun j -> float(j.mmr)) |> Array.average
-                                | None -> (0.) // what to do here?
+                                 p|> Array.map(fun j -> float(j.mmr)) |> Array.average
                                 )
                 Data.[index] <- [ for i in 0..(mmrs.Length-1) do yield (dates.[i], mmrs.[i])]
                 )
