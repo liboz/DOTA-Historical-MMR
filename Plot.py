@@ -5,7 +5,6 @@ Created on Mon Feb 15 19:31:54 2016
 @author: Libo
 """
 
-import datetime
 import json
 
 from dateutil.parser import parse
